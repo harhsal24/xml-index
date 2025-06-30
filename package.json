@@ -1,0 +1,161 @@
+{
+  "name": "xml-indexer",
+  "displayName": "XML Indexer (xi)",
+  "description": "Advanced XML element indexing with inline decorations, sidebar tree view",
+  "version": "1.2.0",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other",
+    "Formatters",
+    "Language Packs"
+  ],
+  "keywords": [
+    "xml",
+    "indexing",
+    "navigation",
+    "tree view"
+  ],
+  "activationEvents": [
+    "onLanguage:xml",
+    "onCommand:xi.toggleInlineMode",
+    "onCommand:xi.toggleSidebarMode",
+    "onCommand:xi.toggleAnnotationMode",
+    "onCommand:xi.toggleNumberMode",
+    "onCommand:xi.indexChildrenAll",
+    "onCommand:xi.revealIndexedLine",
+    "onCommand:xi.closeAllModes"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "xi.toggleInlineMode",
+        "title": "Toggle Inline Mode",
+        "category": "XML Indexer",
+        "icon": {
+          "light": "$(tag)",
+          "dark": "$(tag)"
+        }
+      },
+      {
+        "command": "xi.toggleSidebarMode",
+        "title": "Toggle Sidebar Mode",
+        "category": "XML Indexer",
+        "icon": {
+          "light": "$(list-tree)",
+          "dark": "$(list-tree)"
+        }
+      },
+      {
+        "command": "xi.toggleAnnotationMode",
+        "title": "Toggle Annotation Mode",
+        "category": "XML Indexer",
+        "icon": {
+          "light": "$(note)",
+          "dark": "$(note)"
+        }
+      },
+      {
+        "command": "xi.toggleNumberMode",
+        "title": "Toggle Number Mode",
+        "category": "XML Indexer",
+        "icon": {
+          "light": "$(symbol-number)",
+          "dark": "$(symbol-number)"
+        }
+      },
+      {
+        "command": "xi.indexChildrenAll",
+        "title": "Index All XML Elements",
+        "category": "XML Indexer",
+        "icon": {
+          "light": "$(refresh)",
+          "dark": "$(refresh)"
+        }
+      },
+      {
+        "command": "xi.revealIndexedLine",
+        "title": "Go to XML Element",
+        "category": "XML Indexer"
+      },
+      {
+        "command": "xi.closeAllModes",
+        "title": "XML Indexer: Disable All Indexing Modes",
+        "category": "XML Indexer"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "xi.indexChildrenAll",
+          "when": "view == xiSidebar",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "xi.revealIndexedLine",
+          "when": "view == xiSidebar",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "xi.indexChildrenAll",
+          "when": "editorLangId == xml",
+          "group": "xml-indexer@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "xi.toggleInlineMode",
+          "when": "editorLangId == xml"
+        },
+        {
+          "command": "xi.toggleSidebarMode",
+          "when": "editorLangId == xml"
+        },
+        {
+          "command": "xi.toggleAnnotationMode",
+          "when": "editorLangId == xml"
+        },
+        {
+          "command": "xi.toggleNumberMode",
+          "when": "editorLangId == xml"
+        },
+        {
+          "command": "xi.indexChildrenAll",
+          "when": "editorLangId == xml"
+        },
+        {
+          "command": "xi.closeAllModes",
+          "when": "editorLangId == xml"
+        },
+        {
+          "command": "xi.revealIndexedLine",
+          "when": "editorLangId == xml"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "node ./test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.74.0",
+    "@types/node": "16.x",
+    "@typescript-eslint/eslint-plugin": "^5.45.0",
+    "@typescript-eslint/parser": "^5.45.0",
+    "eslint": "^8.28.0"
+  },
+
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  }
+}
