@@ -1,32 +1,16 @@
 {
   "name": "xml-indexer",
-  "displayName": "XML Indexer (xi)",
-  "description": "Advanced XML element indexing with inline decorations, sidebar tree view",
-  "version": "1.2.0",
-  "publisher": "your-publisher-name",
+  "displayName": "XML Indexer",
+  "description": "Index and navigate XML elements with inline, sidebar, and annotation modes",
+  "version": "1.0.0",
   "engines": {
     "vscode": "^1.74.0"
   },
   "categories": [
-    "Other",
-    "Formatters",
-    "Language Packs"
-  ],
-  "keywords": [
-    "xml",
-    "indexing",
-    "navigation",
-    "tree view"
+    "Other"
   ],
   "activationEvents": [
-    "onLanguage:xml",
-    "onCommand:xi.toggleInlineMode",
-    "onCommand:xi.toggleSidebarMode",
-    "onCommand:xi.toggleAnnotationMode",
-    "onCommand:xi.toggleNumberMode",
-    "onCommand:xi.indexChildrenAll",
-    "onCommand:xi.revealIndexedLine",
-    "onCommand:xi.closeAllModes"
+    "onLanguage:xml"
   ],
   "main": "./src/extension.js",
   "contributes": {
@@ -34,112 +18,93 @@
       {
         "command": "xi.toggleInlineMode",
         "title": "Toggle Inline Mode",
-        "category": "XML Indexer",
-        "icon": {
-          "light": "$(tag)",
-          "dark": "$(tag)"
-        }
+        "category": "XML Indexer"
       },
       {
         "command": "xi.toggleSidebarMode",
         "title": "Toggle Sidebar Mode",
-        "category": "XML Indexer",
-        "icon": {
-          "light": "$(list-tree)",
-          "dark": "$(list-tree)"
-        }
+        "category": "XML Indexer"
       },
       {
         "command": "xi.toggleAnnotationMode",
         "title": "Toggle Annotation Mode",
-        "category": "XML Indexer",
-        "icon": {
-          "light": "$(note)",
-          "dark": "$(note)"
-        }
+        "category": "XML Indexer"
       },
       {
         "command": "xi.toggleNumberMode",
         "title": "Toggle Number Mode",
-        "category": "XML Indexer",
-        "icon": {
-          "light": "$(symbol-number)",
-          "dark": "$(symbol-number)"
-        }
+        "category": "XML Indexer"
       },
       {
         "command": "xi.indexChildrenAll",
         "title": "Index All XML Elements",
-        "category": "XML Indexer",
-        "icon": {
-          "light": "$(refresh)",
-          "dark": "$(refresh)"
-        }
-      },
-      {
-        "command": "xi.revealIndexedLine",
-        "title": "Go to XML Element",
         "category": "XML Indexer"
       },
       {
         "command": "xi.closeAllModes",
-        "title": "XML Indexer: Disable All Indexing Modes",
+        "title": "Close All Modes",
         "category": "XML Indexer"
+      },
+      {
+        "command": "xi.revealIndexedLine",
+        "title": "Reveal Indexed Line"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "xmlIndexedChildren",
+          "name": "XML Elements",
+          "when": "resourceExtname == .xml"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "xmlIndexedChildren",
+        "contents": "No XML elements found.\n[Enable Sidebar Mode](command:xi.toggleSidebarMode)\nOpen an XML file and enable sidebar mode to see indexed elements."
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "xi.indexChildrenAll",
-          "when": "view == xiSidebar",
+          "command": "xi.toggleSidebarMode",
+          "when": "view == xmlIndexedChildren",
           "group": "navigation"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "xi.revealIndexedLine",
-          "when": "view == xiSidebar",
-          "group": "navigation"
-        }
-      ],
-      "editor/context": [
+        },
         {
           "command": "xi.indexChildrenAll",
-          "when": "editorLangId == xml",
-          "group": "xml-indexer@2"
+          "when": "view == xmlIndexedChildren",
+          "group": "navigation"
         }
       ],
       "commandPalette": [
         {
-          "command": "xi.toggleInlineMode",
-          "when": "editorLangId == xml"
-        },
-        {
-          "command": "xi.toggleSidebarMode",
-          "when": "editorLangId == xml"
-        },
-        {
-          "command": "xi.toggleAnnotationMode",
-          "when": "editorLangId == xml"
-        },
-        {
-          "command": "xi.toggleNumberMode",
-          "when": "editorLangId == xml"
-        },
-        {
-          "command": "xi.indexChildrenAll",
-          "when": "editorLangId == xml"
-        },
-        {
-          "command": "xi.closeAllModes",
-          "when": "editorLangId == xml"
-        },
-        {
           "command": "xi.revealIndexedLine",
-          "when": "editorLangId == xml"
+          "when": "false"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "xi.toggleInlineMode",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "editorLangId == xml"
+      },
+      {
+        "command": "xi.toggleSidebarMode",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "editorLangId == xml"
+      },
+      {
+        "command": "xi.toggleAnnotationMode",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a",
+        "when": "editorLangId == xml"
+      }
+    ]
   },
   "scripts": {
     "lint": "eslint .",
@@ -149,13 +114,7 @@
   "devDependencies": {
     "@types/vscode": "^1.74.0",
     "@types/node": "16.x",
-    "@typescript-eslint/eslint-plugin": "^5.45.0",
-    "@typescript-eslint/parser": "^5.45.0",
-    "eslint": "^8.28.0"
-  },
-
-  "galleryBanner": {
-    "color": "#1e1e1e",
-    "theme": "dark"
+    "eslint": "^8.0.0",
+    "@vscode/test-electron": "^2.0.0"
   }
 }

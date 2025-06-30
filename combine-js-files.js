@@ -72,17 +72,11 @@ function scanDocumentForTags(document) {
     }
 
     const text = document.getText();
-    const tagRegex = /<([A-Za-z0-9_:-]+)(\s[^>]*)?(?:\s*\/)?>/g;
+    const tagRegex = /<([A-Za-z0-9_:-]+)(\s[^>]*)?>/g;
     const tagCounts = Object.create(null);
     const newIndexedData = [];
     let match;
     let seq = 0;
-
-    // Clear previous data for this document
-    const docKey = document.uri.toString();
-    if (!globalThis.xmlIndexerData) {
-        globalThis.xmlIndexerData = new Map();
-    }
 
     while ((match = tagRegex.exec(text)) !== null) {
         seq++;
@@ -98,11 +92,15 @@ function scanDocumentForTags(document) {
             line: position.line,
             uri: document.uri,
             sequence: seq,
-            documentId: document.uri.toString()
+            documentId: document.uri.toString() // Add unique document identifier
         });
     }
 
     // Store indexed data per document
+    const docKey = document.uri.toString();
+    if (!globalThis.xmlIndexerData) {
+        globalThis.xmlIndexerData = new Map();
+    }
     globalThis.xmlIndexerData.set(docKey, newIndexedData);
     
     // Update global lastIndexedData for backward compatibility
@@ -128,7 +126,7 @@ function getIndexedDataForDocument(document) {
     return globalThis.xmlIndexerData.get(docKey) || [];
 }
 
-// Decoration functions - FIXED SPACING
+// Decoration functions
 function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
     if (!editor) {
         outputChannel?.appendLine('[decoration] No active editor; skipping inline decorations.');
@@ -154,7 +152,7 @@ function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
 
     decorationType = vscode.window.createTextEditorDecorationType({
         after: {
-            margin: '0 0 0 1.5em', // Increased margin for better spacing
+            margin: '0 0 0 1em',
             fontStyle: 'italic',
             color: new vscode.ThemeColor('editorCodeLens.foreground')
         }
@@ -184,10 +182,9 @@ function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
             pos = new vscode.Position(entry.line, 0);
         }
 
-        // FIXED: Added proper spacing around the indexed number/text
         const contentText = numberModeEnabled
-            ? ` ← #${entry.sequence} ` // Added spaces around the content
-            : ` ← [${entry.tag} #${entry.index}] `;
+            ? `← #${entry.sequence}`
+            : `← [${entry.tag} #${entry.index}]`;
 
         decorations.push({
             range: new vscode.Range(pos, pos),
@@ -220,7 +217,7 @@ function disposeDecoration() {
     }
 }
 
-// CodeLens functions - FIXED DUPLICATE ANNOTATIONS
+// CodeLens functions - FIXED FOR DIFF MODE
 function refreshCodeLenses() {
     if (codeLensEmitter) {
         codeLensEmitter.fire();
@@ -251,21 +248,13 @@ function registerXmlCodeLensProvider(context) {
             outputChannel?.appendLine(`[CodeLens] Found ${entries.length} indexed entries for this document`);
 
             const lenses = [];
-            const processedLines = new Set(); // FIXED: Prevent duplicate annotations on same line
-
             for (const entry of entries) {
                 try {
-                    // FIXED: Skip if we already processed this line
-                    if (processedLines.has(entry.line)) {
-                        continue;
-                    }
-                    processedLines.add(entry.line);
-
                     const pos = document.positionAt(entry.offset);
                     const range = new vscode.Range(pos, pos);
                     const title = isNumberMode()
-                        ? ` #${entry.sequence}`
-                        : ` [${entry.tag} #${entry.index}]`;
+                        ? `#${entry.sequence}`
+                        : `[${entry.tag} #${entry.index}]`;
 
                     lenses.push(new vscode.CodeLens(range, {
                         command: 'xi.revealIndexedLine',
@@ -284,22 +273,29 @@ function registerXmlCodeLensProvider(context) {
         onDidChangeCodeLenses: codeLensEmitter.event
     };
 
-    // Register provider with single, comprehensive selector
-    const disposable = vscode.languages.registerCodeLensProvider(
-        [
-            { language: 'xml' },
-            { pattern: '**/*.xml' }
-        ],
-        provider
-    );
-    
-    context.subscriptions.push(disposable);
-    outputChannel?.appendLine(`[CodeLens] Registered CodeLens provider`);
+    // IMPROVED SELECTOR FOR DIFF MODE
+    const selectors = [
+        { language: 'xml', scheme: '*' },
+        { pattern: '**/*.xml', scheme: '*' },
+        { scheme: 'vscode-diff' }, // For diff view
+        { scheme: 'file' }, // Fallback for file scheme
+    ];
+
+    // Register provider for multiple selectors
+    selectors.forEach((selector, index) => {
+        try {
+            const disposable = vscode.languages.registerCodeLensProvider(selector, provider);
+            context.subscriptions.push(disposable);
+            outputChannel?.appendLine(`[CodeLens] Registered provider ${index + 1} with selector: ${JSON.stringify(selector)}`);
+        } catch (error) {
+            outputChannel?.appendLine(`[CodeLens] Failed to register provider ${index + 1}: ${error.message}`);
+        }
+    });
 
     return provider;
 }
 
-// XML Tree Provider - IMPROVED WITH DROPDOWN STYLE
+// XML Tree Provider - IMPROVED FOR DIFF MODE
 class XmlIndexedChildrenProvider {
     constructor() {
         this._onDidChangeTreeData = new vscode.EventEmitter();
@@ -314,16 +310,6 @@ class XmlIndexedChildrenProvider {
 
     getTreeItem(element) {
         outputChannel?.appendLine(`[TreeProvider] getTreeItem called for: ${element.label}`);
-        
-        if (element.isGroup) {
-            // FIXED: Group items with dropdown style
-            const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
-            item.iconPath = new vscode.ThemeIcon('symbol-namespace');
-            item.tooltip = `${element.count} ${element.tagName} elements`;
-            return item;
-        }
-
-        // Individual element items
         const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
         item.command = {
             command: 'xi.revealIndexedLine',
@@ -331,39 +317,19 @@ class XmlIndexedChildrenProvider {
             arguments: [element.uri, element.line]
         };
 
-                // Enhanced icon mapping for XML elements
         const tagName = element.tag?.toLowerCase() || '';
-        
-        // Common XML structure elements
-        if (tagName.includes('root') || tagName.includes('document')) {
-             item.iconPath = new vscode.ThemeIcon('folder');
-        } else if (tagName.includes('header') || tagName.includes('head')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-method');
-        } else if (tagName.includes('body') || tagName.includes('content')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-class');
-        } else if (tagName.includes('section') || tagName.includes('div') || tagName.includes('container')) {
+        if (tagName.includes('div') || tagName.includes('section')) {
             item.iconPath = new vscode.ThemeIcon('symbol-structure');
-        } else if (tagName.includes('list') || tagName.includes('ul') || tagName.includes('ol')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-array');
-        } else if (tagName.includes('item') || tagName.includes('li') || tagName.includes('entry')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-property');
-        } else if (tagName.includes('text') || tagName.includes('p') || tagName.includes('span') || tagName.includes('label')) {
+        } else if (tagName.includes('text') || tagName.includes('p') || tagName.includes('span')) {
             item.iconPath = new vscode.ThemeIcon('symbol-string');
-        } else if (tagName.includes('img') || tagName.includes('image') || tagName.includes('picture')) {
+        } else if (tagName.includes('img') || tagName.includes('image')) {
             item.iconPath = new vscode.ThemeIcon('file-media');
-        } else if (tagName.includes('link') || tagName.includes('a') || tagName.includes('href')) {
+        } else if (tagName.includes('link') || tagName.includes('a')) {
             item.iconPath = new vscode.ThemeIcon('link');
-        } else if (tagName.includes('button') || tagName.includes('input') || tagName.includes('form')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-event');
-        } else if (tagName.includes('table') || tagName.includes('row') || tagName.includes('cell')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-field');
-        } else if (tagName.includes('config') || tagName.includes('setting') || tagName.includes('property')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-constant');
-        } else if (tagName.includes('data') || tagName.includes('value') || tagName.includes('field')) {
-            item.iconPath = new vscode.ThemeIcon('symbol-variable');
         } else {
             item.iconPath = new vscode.ThemeIcon('symbol-xml');
         }
+
         item.tooltip = `${element.tag} element at line ${element.line + 1}`;
         return item;
     }
@@ -376,54 +342,31 @@ class XmlIndexedChildrenProvider {
             return [];
         }
 
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            outputChannel?.appendLine('[TreeProvider] No active editor');
-            return [];
-        }
-        
-        if (!isXmlDocument(editor.document)) {
-            outputChannel?.appendLine(`[TreeProvider] Document is not XML: ${editor.document.languageId}`);
-            return [];
-        }
-
-        const entries = getIndexedDataForDocument(editor.document);
-        outputChannel?.appendLine(`[TreeProvider] Found ${entries.length} entries for current document`);
-
         if (!element) {
-            // FIXED: Root level - create grouped dropdown structure
-            const tagGroups = {};
+            const editor = vscode.window.activeTextEditor;
+            if (!editor) {
+                outputChannel?.appendLine('[TreeProvider] No active editor');
+                return [];
+            }
             
-            entries.forEach(entry => {
-                if (!tagGroups[entry.tag]) {
-                    tagGroups[entry.tag] = [];
-                }
-                tagGroups[entry.tag].push(entry);
-            });
+            if (!isXmlDocument(editor.document)) {
+                outputChannel?.appendLine(`[TreeProvider] Document is not XML: ${editor.document.languageId}`);
+                return [];
+            }
 
-            const children = Object.keys(tagGroups).map(tagName => ({
-                label: `${tagName} (${tagGroups[tagName].length})`,
-                isGroup: true,
-                tagName: tagName,
-                count: tagGroups[tagName].length,
-                entries: tagGroups[tagName]
-            }));
+            const entries = getIndexedDataForDocument(editor.document);
+            outputChannel?.appendLine(`[TreeProvider] Found ${entries.length} entries for current document`);
             
-            outputChannel?.appendLine(`[TreeProvider] Returning ${children.length} tag groups`);
-            return children;
-        } else if (element.isGroup) {
-            // FIXED: Expanded group - show individual elements
-            const children = element.entries.map((entry, index) => ({
+            const children = entries.map(entry => ({
                 label: isNumberMode() 
-                    ? `#${entry.sequence} (line ${entry.line + 1})` 
+                    ? `#${entry.sequence} - ${entry.tag}` 
                     : `${entry.tag} [#${entry.index}] (line ${entry.line + 1})`,
                 uri: editor.document.uri,
                 line: entry.line,
-                tag: entry.tag,
-                isGroup: false
+                tag: entry.tag
             }));
             
-            outputChannel?.appendLine(`[TreeProvider] Returning ${children.length} entries for group ${element.tagName}`);
+            outputChannel?.appendLine(`[TreeProvider] Returning ${children.length} children`);
             return children;
         }
         
@@ -431,7 +374,7 @@ class XmlIndexedChildrenProvider {
     }
 }
 
-// Event handling and display functions - IMPROVED
+// Event handling and display functions - IMPROVED FOR DIFF MODE
 function doIndexDisplay() {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
@@ -471,11 +414,15 @@ function doIndexDisplay() {
             }
         }
 
-        // Annotations / CodeLens
-        if (isAnnotationMode()) {
-            outputChannel?.appendLine('[events] Refreshing CodeLenses...');
+        // Annotations / CodeLens - FORCE REFRESH
+        outputChannel?.appendLine('[events] Refreshing CodeLenses...');
+        refreshCodeLenses();
+        
+        // Additional delay for diff mode
+        setTimeout(() => {
             refreshCodeLenses();
-        }
+            outputChannel?.appendLine('[events] CodeLenses refreshed with delay');
+        }, 100);
 
     } catch (error) {
         outputChannel?.appendLine(`[events] Error during index display: ${error.message}`);
@@ -522,6 +469,10 @@ function registerCommands(context) {
             }
 
             vscode.window.showInformationMessage(`XML Inline indexing ${newVal ? 'enabled' : 'disabled'}`);
+
+            if (isAnnotationMode()) {
+                refreshCodeLenses();
+            }
         })
     );
 
@@ -551,7 +502,7 @@ function registerCommands(context) {
         })
     );
 
-    // Toggle Annotation Mode
+    // Toggle Annotation Mode - IMPROVED
     context.subscriptions.push(
         vscode.commands.registerCommand('xi.toggleAnnotationMode', async () => {
             const newVal = !isAnnotationMode();
@@ -566,7 +517,11 @@ function registerCommands(context) {
                     outputChannel?.appendLine('[Command] Scanning document for annotation mode...');
                     scanDocumentForTags(editor.document);
                 }
+                
+                // Force refresh CodeLenses multiple times for diff mode
                 refreshCodeLenses();
+                setTimeout(() => refreshCodeLenses(), 100);
+                setTimeout(() => refreshCodeLenses(), 500);
             }
         })
     );
@@ -580,18 +535,18 @@ function registerCommands(context) {
             vscode.window.showInformationMessage(`XML Number-only mode ${newVal ? 'enabled' : 'disabled'}`);
 
             const editor = vscode.window.activeTextEditor;
-            if (editor && isXmlDocument(editor.document)) {
-                if (isInlineMode()) {
+            if (editor && isXmlDocument(editor.document) && isInlineMode()) {
+                scanDocumentForTags(editor.document);
+                applyInlineDecorations(editor, true, newVal);
+            }
+            if (isAnnotationMode()) {
+                if (editor && isXmlDocument(editor.document)) {
                     scanDocumentForTags(editor.document);
-                    applyInlineDecorations(editor, true, newVal);
                 }
-                if (isAnnotationMode()) {
-                    scanDocumentForTags(editor.document);
-                    refreshCodeLenses();
-                }
-                if (isSidebarMode() && xmlIndexedProvider) {
-                    xmlIndexedProvider.refresh();
-                }
+                refreshCodeLenses();
+            }
+            if (isSidebarMode() && xmlIndexedProvider) {
+                xmlIndexedProvider.refresh();
             }
         })
     );
@@ -656,7 +611,7 @@ function registerCommands(context) {
     );
 }
 
-// Event handlers
+// Event handlers - IMPROVED FOR DIFF MODE
 function registerEventHandlers(context) {
     let updateTimeout = null;
 
@@ -695,6 +650,22 @@ function registerEventHandlers(context) {
                     outputChannel?.appendLine('[events] Debounced onDidChangeTextDocument trigger.');
                     doIndexDisplay();
                 }, 500);
+            }
+        })
+    );
+
+    // Additional event for diff mode - when visible text editors change
+    context.subscriptions.push(
+        vscode.window.onDidChangeVisibleTextEditors(editors => {
+            outputChannel?.appendLine(`[events] onDidChangeVisibleTextEditors: ${editors.length} editors`);
+            editors.forEach((editor, index) => {
+                if (isXmlDocument(editor.document)) {
+                    outputChannel?.appendLine(`[events] Visible XML editor ${index}: ${editor.document.uri.toString()}`);
+                    scanDocumentForTags(editor.document);
+                }
+            });
+            if (isAnnotationMode()) {
+                refreshCodeLenses();
             }
         })
     );

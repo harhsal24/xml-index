@@ -1,0 +1,951 @@
+// FILE: src\commands\closeAllModes.js
+// src/commands/closeAllModes.js
+const vscode = require('vscode');
+const decoration = require('../utils/decoration');
+const statusBar = require('../utils/statusBar');
+const stateManager = require('../utils/stateManager');
+const { refreshCodeLenses } = require('../utils/codeLensProvider');
+
+function register(context, xmlIndexedProvider) {
+  const cmd = 'xi.closeAllModes';
+  const disposable = vscode.commands.registerCommand(cmd, async () => {
+    // Disable all flags
+    await stateManager.setInlineMode(false);
+    await stateManager.setSidebarMode(false);
+    await stateManager.setAnnotationMode(false);
+    await stateManager.setNumberMode(false);
+
+    // Update status bar
+    statusBar.loadState(context.globalState);
+
+    // Clear inline decorations
+    decoration.disposeDecoration();
+
+    // Refresh sidebar
+    if (xmlIndexedProvider && typeof xmlIndexedProvider.refresh === 'function') {
+      xmlIndexedProvider.refresh();
+    }
+
+    // Refresh CodeLens
+    refreshCodeLenses();
+
+    vscode.window.showInformationMessage('All XML indexing modes have been disabled');
+  });
+  context.subscriptions.push(disposable);
+}
+
+module.exports = { register };
+
+
+// FILE: src\commands\index.js
+// src/commands/index.js
+const toggleInlineMode = require('./toggleInlineMode');
+const toggleSidebarMode = require('./toggleSidebarMode');
+const toggleAnnotationMode = require('./toggleAnnotationMode');
+const toggleNumberMode = require('./toggleNumberMode');
+const indexChildrenAll = require('./indexChildrenAll');
+const revealCommands = require('./revealCommands');
+const closeAllModes = require('./closeAllModes');
+
+
+function registerAll(context, xmlIndexedProvider, bookmarkProvider) {
+  toggleInlineMode.register(context);
+  toggleSidebarMode.register(context, xmlIndexedProvider);
+  toggleAnnotationMode.register(context);
+  toggleNumberMode.register(context);
+  indexChildrenAll.register(context, xmlIndexedProvider);
+  revealCommands.register(context);
+  closeAllModes.register(context, xmlIndexedProvider);
+}
+
+module.exports = { registerAll };
+
+
+// FILE: src\commands\indexChildrenAll.js
+// src/commands/indexChildrenAll.js
+const vscode = require('vscode');
+const indexer = require('../utils/indexer');
+const decoration = require('../utils/decoration');
+const stateManager = require('../utils/stateManager');
+const { refreshCodeLenses } = require('../utils/codeLensProvider');
+
+function register(context, xmlIndexedProvider) {
+  const cmd = 'xi.indexChildrenAll';
+  const disposable = vscode.commands.registerCommand(cmd, async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== 'xml') {
+      vscode.window.showErrorMessage('Please open an XML file first');
+      return;
+    }
+    try {
+      indexer.scanDocumentForTags(editor.document);
+
+      // Inline
+      if (stateManager.isInlineMode()) {
+        decoration.applyInlineDecorations(editor, true, stateManager.isNumberMode());
+      } else {
+        decoration.disposeDecoration();
+      }
+      // Sidebar
+      if (stateManager.isSidebarMode()) {
+        xmlIndexedProvider.refresh();
+      }
+      // Annotation
+      if (stateManager.isAnnotationMode()) {
+        refreshCodeLenses();
+      }
+      const count = indexer.getLastIndexedData().length;
+      vscode.window.showInformationMessage(`Successfully indexed ${count} XML elements`);
+    } catch (error) {
+      console.error(error);
+      vscode.window.showErrorMessage('Failed to index XML elements');
+    }
+  });
+  context.subscriptions.push(disposable);
+}
+
+module.exports = { register };
+
+
+// FILE: src\commands\revealCommands.js
+// src/commands/revealCommands.js
+const vscode = require('vscode');
+
+/**
+ * Reveal a given bookmarked line in the editor, highlight the whole line briefly.
+ * @param {vscode.Uri} uri
+ * @param {number} line
+ */
+async function revealBookmarkLine(uri, line) {
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const ed = await vscode.window.showTextDocument(doc, { preview: false });
+    if (line < 0 || line >= doc.lineCount) {
+      vscode.window.showWarningMessage('Bookmark line out of range');
+      return;
+    }
+    const pos = new vscode.Position(line, 0);
+    ed.selection = new vscode.Selection(pos, pos);
+    ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+
+    // Highlight the line briefly
+    const decorationType = vscode.window.createTextEditorDecorationType({
+      backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
+      isWholeLine: true
+    });
+    const range = doc.lineAt(line).range;
+    ed.setDecorations(decorationType, [range]);
+    setTimeout(() => decorationType.dispose(), 2000);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Failed to reveal bookmark: ${err.message}`);
+    console.error(err);
+  }
+}
+
+/**
+ * Register reveal commands for bookmarks.
+ */
+function register(context) {
+  context.subscriptions.push(
+    vscode.commands.registerCommand('xi.revealBookmarkLine', revealBookmarkLine)
+  );
+}
+
+module.exports = { register };
+
+
+// FILE: src\commands\revealIndexedLine.js
+// src/commands/revealIndexedLine.js
+const vscode = require('vscode');
+
+async function revealIndexedLine(uri, line) {
+  try {
+    const doc = await vscode.workspace.openTextDocument(uri);
+    const ed = await vscode.window.showTextDocument(doc, { preview: false });
+    const pos = new vscode.Position(line, 0);
+    ed.selection = new vscode.Selection(pos, pos);
+    ed.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
+    const decoration = vscode.window.createTextEditorDecorationType({
+      backgroundColor: new vscode.ThemeColor('editor.findMatchHighlightBackground'),
+      isWholeLine: true
+    });
+    ed.setDecorations(decoration, [new vscode.Range(pos, pos)]);
+    setTimeout(() => decoration.dispose(), 2000);
+  } catch (err) {
+    vscode.window.showErrorMessage(`Failed to reveal line: ${err.message}`);
+    console.error(err);
+  }
+}
+
+function register(context) {
+  context.subscriptions.push(
+    vscode.commands.registerCommand('xi.revealIndexedLine', (uri, line) => revealIndexedLine(uri, line))
+  );
+}
+
+module.exports = { register, revealIndexedLine };
+
+// FILE: src\commands\toggleAnnotationMode.js
+// src/commands/toggleAnnotationMode.js
+const vscode = require('vscode');
+const indexer = require('../utils/indexer');
+const stateManager = require('../utils/stateManager');
+const statusBar = require('../utils/statusBar');
+const { refreshCodeLenses } = require('../utils/codeLensProvider');
+
+function register(context) {
+  const cmd = 'xi.toggleAnnotationMode';
+  const disposable = vscode.commands.registerCommand(cmd, async () => {
+    const newVal = !stateManager.isAnnotationMode();
+    await stateManager.setAnnotationMode(newVal);
+
+    // Update status bar
+    statusBar.loadState(context.globalState);
+
+    vscode.window.showInformationMessage(`XML Annotation indexing ${newVal ? 'enabled' : 'disabled'}`);
+
+    // If enabling, scan current doc so indexer has data
+    const editor = vscode.window.activeTextEditor;
+    if (newVal && editor && editor.document.languageId === 'xml') {
+      indexer.scanDocumentForTags(editor.document);
+    }
+    // Refresh CodeLenses (will clear if turning off, or populate if on)
+    refreshCodeLenses();
+  });
+  context.subscriptions.push(disposable);
+}
+
+module.exports = { register };
+
+
+// FILE: src\commands\toggleInlineMode.js
+// src/commands/toggleInlineMode.js
+const vscode = require('vscode');
+const decoration = require('../utils/decoration');
+const indexer = require('../utils/indexer');
+const stateManager = require('../utils/stateManager');
+const statusBar = require('../utils/statusBar');
+const { refreshCodeLenses } = require('../utils/codeLensProvider');
+
+function register(context) {
+  const cmd = 'xi.toggleInlineMode';
+  const disposable = vscode.commands.registerCommand(cmd, async () => {
+    const newVal = !stateManager.isInlineMode();
+    await stateManager.setInlineMode(newVal);
+
+    // Update status bar
+    statusBar.loadState(context.globalState);
+
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.languageId === 'xml') {
+      if (newVal) {
+        indexer.scanDocumentForTags(editor.document);
+        decoration.applyInlineDecorations(editor, true, stateManager.isNumberMode());
+      } else {
+        decoration.disposeDecoration();
+      }
+    }
+
+    vscode.window.showInformationMessage(`XML Inline indexing ${newVal ? 'enabled' : 'disabled'}`);
+
+    // If annotation mode is on, refresh CodeLenses so positions align
+    if (stateManager.isAnnotationMode()) {
+      refreshCodeLenses();
+    }
+  });
+  context.subscriptions.push(disposable);
+}
+
+module.exports = { register };
+
+
+// FILE: src\commands\toggleNumberMode.js
+// src/commands/toggleNumberMode.js
+const vscode = require('vscode');
+const indexer = require('../utils/indexer');
+const decoration = require('../utils/decoration');
+const stateManager = require('../utils/stateManager');
+const statusBar = require('../utils/statusBar');
+const { refreshCodeLenses } = require('../utils/codeLensProvider');
+
+function register(context) {
+  const cmd = 'xi.toggleNumberMode';
+  const disposable = vscode.commands.registerCommand(cmd, async () => {
+    const newVal = !stateManager.isNumberMode();
+    await stateManager.setNumberMode(newVal);
+
+    // Update status bar
+    statusBar.loadState(context.globalState);
+
+    vscode.window.showInformationMessage(`XML Number-only mode ${newVal ? 'enabled' : 'disabled'}`);
+
+    // Re-apply inline if inline is on
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.languageId === 'xml' && stateManager.isInlineMode()) {
+      indexer.scanDocumentForTags(editor.document);
+      decoration.applyInlineDecorations(editor, true, newVal);
+    }
+    // Refresh CodeLenses if annotation is on
+    if (stateManager.isAnnotationMode()) {
+      // rescan if needed
+      if (editor && editor.document.languageId === 'xml') {
+        indexer.scanDocumentForTags(editor.document);
+      }
+      refreshCodeLenses();
+    }
+  });
+  context.subscriptions.push(disposable);
+}
+
+module.exports = { register };
+
+
+// FILE: src\commands\toggleSidebarMode.js
+// src/commands/toggleSidebarMode.js
+const vscode = require('vscode');
+const stateManager = require('../utils/stateManager');
+const statusBar = require('../utils/statusBar');
+
+function register(context, xmlIndexedProvider) {
+  const cmd = 'xi.toggleSidebarMode';
+  const disposable = vscode.commands.registerCommand(cmd, async () => {
+    const newVal = !stateManager.isSidebarMode();
+    await stateManager.setSidebarMode(newVal);
+
+    // Update status bar
+    statusBar.loadState(context.globalState);
+
+    vscode.window.showInformationMessage(`XML Sidebar indexing ${newVal ? 'enabled' : 'disabled'}`);
+
+    // Refresh the tree view
+    if (xmlIndexedProvider && typeof xmlIndexedProvider.refresh === 'function') {
+      xmlIndexedProvider.refresh();
+    }
+  });
+  context.subscriptions.push(disposable);
+}
+
+module.exports = { register };
+
+
+// FILE: src\extension.js
+// src/utils/bookmarkDecoration.js
+const vscode = require("vscode");
+let decorationType = null;
+let contextGlobal = null;
+
+const { registerAll } = require("./commands/index");
+const XmlIndexedChildrenProvider = require("./providers/xmlIndexedChildrenProvider");
+
+/**
+ * Initialize the bookmark decoration type.
+ * Call once in activate(context).
+ * @param {vscode.ExtensionContext} context
+ */
+function init(context) {
+  contextGlobal = context;
+
+  const iconPath = context.asAbsolutePath("resources/bookmark.svg");
+
+  decorationType = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    gutterIconPath: iconPath,
+    gutterIconSize: "contain",
+    backgroundColor: new vscode.ThemeColor(
+      "editor.wordHighlightStrongBackground"
+    ),
+    overviewRulerColor: "rgba(255,165,0,0.7)",
+    overviewRulerLane: vscode.OverviewRulerLane.Right,
+  });
+
+  updateDecorationsForAllEditors();
+}
+
+/**
+ * @param {vscode.ExtensionContext} context
+ */
+function activate(context) {
+  // Register sidebar/tree views
+
+  // ✅ Register all commands (including xi.clearAllBookmarks)
+  registerAll(context);
+}
+
+function deactivate() {}
+
+/**
+ * Dispose the decoration type.
+ */
+function dispose() {
+  if (decorationType) {
+    decorationType.dispose();
+    decorationType = null;
+  }
+}
+
+/**
+ * Update decorations for a specific editor.
+ * @param {vscode.TextEditor} editor
+ * @param {Array} [bookmarks] Optional array of bookmarks
+ */
+function updateDecorationsForEditor(editor, bookmarks) {
+  if (!decorationType || !editor || !editor.document || !contextGlobal) return;
+
+  const storeKey = "xiBookmarks";
+  const allBookmarks =
+    bookmarks || contextGlobal.workspaceState.get(storeKey, []);
+  const uriString = editor.document.uri.toString();
+  const ranges = [];
+
+  for (const b of allBookmarks) {
+    if (b.file === uriString && Number.isInteger(b.line)) {
+      if (b.line >= 0 && b.line < editor.document.lineCount) {
+        ranges.push(editor.document.lineAt(b.line).range);
+      }
+    }
+  }
+
+  editor.setDecorations(decorationType, ranges);
+}
+
+/**
+ * Update decorations for all visible editors.
+ */
+function updateDecorationsForAllEditors() {
+  for (const editor of vscode.window.visibleTextEditors) {
+    updateDecorationsForEditor(editor);
+  }
+}
+
+module.exports = {
+  init,
+  dispose,
+  updateDecorationsForEditor,
+  updateDecorationsForAllEditors,
+  activate,
+  deactivate,
+};
+
+
+// FILE: src\providers\xmlIndexedChildrenProvider.js
+// src/providers/xmlIndexedChildrenProvider.js
+const vscode = require('vscode');
+const indexer = require('../utils/indexer');
+const stateManager = require('../utils/stateManager');
+
+class XmlIndexedChildrenProvider {
+  constructor() {
+    this._onDidChangeTreeData = new vscode.EventEmitter();
+    this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+  }
+  refresh() {
+    this._onDidChangeTreeData.fire();
+  }
+  getTreeItem(element) {
+    const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
+    item.command = {
+      command: 'xi.revealIndexedLine',
+      title: 'Go to XML Element',
+      arguments: [element.uri, element.line]
+    };
+    const tagName = element.tag?.toLowerCase() || '';
+    if (tagName.includes('div') || tagName.includes('section')) {
+      item.iconPath = new vscode.ThemeIcon('symbol-structure');
+    } else if (tagName.includes('text') || tagName.includes('p') || tagName.includes('span')) {
+      item.iconPath = new vscode.ThemeIcon('symbol-string');
+    } else if (tagName.includes('img') || tagName.includes('image')) {
+      item.iconPath = new vscode.ThemeIcon('file-media');
+    } else if (tagName.includes('link') || tagName.includes('a')) {
+      item.iconPath = new vscode.ThemeIcon('link');
+    } else {
+      item.iconPath = new vscode.ThemeIcon('symbol-xml');
+    }
+    item.tooltip = `${element.tag} element at line ${element.line + 1}`;
+    return item;
+  }
+  getChildren() {
+    if (!stateManager.isSidebarMode()) {
+      return [];
+    }
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== 'xml') {
+      return [];
+    }
+    const docUri = editor.document.uri.toString();
+    const entries = indexer.getLastIndexedData().filter(e => e.uri.toString() === docUri);
+    return entries.map(entry => ({
+      label: `${entry.tag} [#${entry.index}] (line ${entry.line + 1})`,
+      uri: editor.document.uri,
+      line: entry.line,
+      tag: entry.tag
+    }));
+  }
+}
+
+module.exports = { XmlIndexedChildrenProvider };
+
+
+// FILE: src\utils\codeLensProvider.js
+// src/utils/codeLensProvider.js
+
+const vscode = require('vscode');
+const indexer = require('./indexer');
+const stateManager = require('./stateManager');
+
+// Module-scoped EventEmitter for CodeLens refresh
+let codeLensEmitter = null;
+
+/**
+ * Register the CodeLensProvider for XML.
+ * Call this in activate(context).
+ */
+function registerXmlCodeLensProvider(context) {
+  codeLensEmitter = new vscode.EventEmitter();
+
+  const provider = {
+    /**
+     * Provide CodeLenses above each tag offset position.
+     */
+    provideCodeLenses(document, token) {
+      // Only if annotation mode is on
+      if (!stateManager.isAnnotationMode()) {
+        return [];
+      }
+
+      const lenses = [];
+      const entries = indexer.getLastIndexedData();
+      for (const entry of entries) {
+        if (entry.uri.toString() !== document.uri.toString()) {
+          continue;
+        }
+        // Position at offset
+        const pos = document.positionAt(entry.offset);
+        const range = new vscode.Range(pos, pos);
+        // Title: number-only or tag-index
+        const title = stateManager.isNumberMode()
+          ? `#${entry.sequence}`
+          : `[${entry.tag} #${entry.index}]`;
+
+        lenses.push(new vscode.CodeLens(range, {
+          command: 'xi.revealIndexedLine',
+          title,
+          arguments: [document.uri, entry.line]
+        }));
+      }
+      return lenses;
+    },
+    /**
+     * Event to signal VS Code to refresh CodeLenses.
+     */
+    onDidChangeCodeLenses: () => {
+      if (!codeLensEmitter) {
+        codeLensEmitter = new vscode.EventEmitter();
+      }
+      return codeLensEmitter.event;
+    }
+  };
+
+  // Register for xml language
+  const selector = { language: 'xml', scheme: '*' };
+  const disposable = vscode.languages.registerCodeLensProvider(selector, provider);
+  context.subscriptions.push(disposable);
+  return disposable;
+}
+
+/**
+ * Fire the emitter so VS Code re-requests CodeLenses.
+ */
+function refreshCodeLenses() {
+  if (codeLensEmitter) {
+    codeLensEmitter.fire();
+  }
+}
+
+module.exports = { registerXmlCodeLensProvider, refreshCodeLenses };
+
+
+// FILE: src\utils\decoration.js
+// src/utils/decoration.js
+const vscode = require('vscode');
+const indexer = require('./indexer');
+
+let decorationType = null;
+
+/**
+ * Apply inline decorations showing either sequence or [tag #index].
+ * @param {vscode.TextEditor} editor 
+ * @param {boolean} inlineModeEnabled 
+ * @param {boolean} numberModeEnabled 
+ */
+function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
+  if (!editor) {
+    console.log('[decoration] No active editor; skipping inline decorations.');
+    return;
+  }
+  if (!inlineModeEnabled) {
+    console.log('[decoration] Inline mode disabled; disposing decorations.');
+    disposeDecoration();
+    return;
+  }
+
+  const doc = editor.document;
+  // Dispose previous decorationType if any
+  if (decorationType) {
+    decorationType.dispose();
+    decorationType = null;
+  }
+  // Create new decoration type
+  decorationType = vscode.window.createTextEditorDecorationType({
+    after: {
+      margin: '0 0 0 1em',
+      fontStyle: 'italic',
+      color: new vscode.ThemeColor('editorCodeLens.foreground')
+    }
+  });
+
+  const decorations = [];
+  const text = doc.getText();
+  const entries = indexer.getLastIndexedData();
+
+  console.log(`[decoration] Applying inline decorations: inlineMode=${inlineModeEnabled}, numberMode=${numberModeEnabled}, entries count=${entries.length}`);
+
+  for (const entry of entries) {
+    if (!entry.uri || entry.uri.toString() !== doc.uri.toString()) {
+      continue;
+    }
+    // Determine position just after the opening tag
+    const offset = entry.offset;
+    if (typeof offset !== 'number') {
+      console.warn('[decoration] entry.offset is not a number:', entry);
+      continue;
+    }
+    const slice = text.slice(offset);
+    const m = slice.match(/^<[^>]*>/);
+    let pos;
+    if (m) {
+      try {
+        pos = doc.positionAt(offset + m[0].length);
+      } catch (e) {
+        console.warn('[decoration] positionAt failed:', e, 'entry:', entry);
+        pos = new vscode.Position(entry.line, 0);
+      }
+    } else {
+      // fallback to beginning of line
+      pos = new vscode.Position(entry.line, 0);
+    }
+
+    // Compose content text
+    const contentText = numberModeEnabled
+      ? `← #${entry.sequence}`
+      : `← [${entry.tag} #${entry.index}]`;
+
+    // Log first few for debugging
+    // if you want, uncomment: console.log(`[decoration] Decorating tag <${entry.tag}> at line ${entry.line}, seq=${entry.sequence}`);
+
+    decorations.push({
+      range: new vscode.Range(pos, pos),
+      renderOptions: {
+        after: {
+          contentText,
+          fontStyle: 'italic',
+          color: new vscode.ThemeColor('editorCodeLens.foreground')
+        }
+      }
+    });
+  }
+
+  try {
+    editor.setDecorations(decorationType, decorations);
+    console.log(`[decoration] Applied ${decorations.length} inline decorations.`);
+  } catch (e) {
+    console.error('[decoration] Failed to set decorations:', e);
+  }
+}
+
+/**
+ * Dispose any existing inline decoration type.
+ */
+function disposeDecoration() {
+  if (decorationType) {
+    try {
+      decorationType.dispose();
+    } catch (e) {
+      console.warn('[decoration] Error disposing decorationType:', e);
+    }
+    decorationType = null;
+  }
+}
+
+module.exports = { applyInlineDecorations, disposeDecoration };
+
+
+// FILE: src\utils\events.js
+// src/utils/events.js
+const vscode = require('vscode');
+const indexer = require('./indexer');
+const decoration = require('./decoration');
+const stateManager = require('./stateManager');
+const { refreshCodeLenses } = require('./codeLensProvider');
+
+/**
+ * Perform indexing display: scan document, then inline decorations,
+ * sidebar refresh, and CodeLens refresh as needed.
+ * @param {XmlIndexedChildrenProvider} xmlIndexedProvider
+ */
+function doIndexDisplay(xmlIndexedProvider) {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    console.log('[events] No active editor; skipping indexing.');
+    return;
+  }
+  if (editor.document.languageId !== 'xml') {
+    console.log(`[events] Language is '${editor.document.languageId}', not 'xml'; skipping indexing.`);
+    // Also dispose any existing inline decorations if you want to clear when switching away:
+    decoration.disposeDecoration();
+    return;
+  }
+
+  try {
+    console.log('[events] doIndexDisplay: scanning document for tags...');
+    indexer.scanDocumentForTags(editor.document);
+    const entries = indexer.getLastIndexedData();
+    console.log(`[events] scanDocumentForTags found ${entries.length} entries.`);
+
+    // Inline decorations
+    if (stateManager.isInlineMode()) {
+      console.log('[events] Inline mode is ON; applying inline decorations.');
+      decoration.applyInlineDecorations(editor, true, stateManager.isNumberMode());
+    } else {
+      console.log('[events] Inline mode is OFF; disposing decorations.');
+      decoration.disposeDecoration();
+    }
+
+    // Sidebar
+    if (stateManager.isSidebarMode()) {
+      console.log('[events] Sidebar mode is ON; refreshing sidebar provider.');
+      if (xmlIndexedProvider && typeof xmlIndexedProvider.refresh === 'function') {
+        xmlIndexedProvider.refresh();
+      }
+    }
+
+    // Annotations / CodeLens
+    if (stateManager.isAnnotationMode()) {
+      console.log('[events] Annotation mode is ON; refreshing CodeLenses.');
+      refreshCodeLenses();
+    } else {
+      console.log('[events] Annotation mode is OFF; no CodeLens refresh.');
+      // Optional: you could still fire refreshCodeLenses() to clear existing lenses when turning off.
+      refreshCodeLenses();
+    }
+  } catch (error) {
+    console.error('[events] Error during index display:', error);
+    vscode.window.showErrorMessage('Failed to index XML elements');
+  }
+}
+
+/**
+ * Register event listeners: active editor change, save, change.
+ */
+function register(context, xmlIndexedProvider) {
+  let updateTimeout = null;
+
+  // On active editor change
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+      console.log('[events] onDidChangeActiveTextEditor triggered.');
+      doIndexDisplay(xmlIndexedProvider);
+    })
+  );
+
+  // On save
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(doc => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && editor.document === doc) {
+        console.log('[events] onDidSaveTextDocument triggered for active editor.');
+        doIndexDisplay(xmlIndexedProvider);
+      }
+    })
+  );
+
+  // On text change with debounce
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument(event => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && editor.document === event.document && editor.document.languageId === 'xml') {
+        if (updateTimeout) {
+          clearTimeout();
+        }
+        updateTimeout = setTimeout(() => {
+          console.log('[events] Debounced onDidChangeTextDocument trigger.');
+          doIndexDisplay(xmlIndexedProvider);
+        }, 500);
+      }
+    })
+  );
+
+  // Optionally clear timeout on deactivate; but as this is closure-scoped, it will be GC'd.
+}
+
+/**
+ * Clear any pending timeout (on deactivate) - optional since scoped locally.
+ */
+function clearTimeout() {
+  // No-op or track externally if desired
+}
+
+module.exports = { doIndexDisplay, register, clearTimeout };
+
+
+// FILE: src\utils\indexer.js
+// src/utils/indexer.js
+
+let lastIndexedData = [];
+
+/**
+ * Scan document text for XML tags and populate lastIndexedData.
+ * Each entry: { tag, index, offset, line, uri, sequence }.
+ */
+function scanDocumentForTags(document) {
+  const text = document.getText();
+  const tagRegex = /<([A-Za-z0-9_:-]+)(\s[^>]*)?>/g;
+  const tagCounts = Object.create(null);
+  const newIndexedData = [];
+  let match;
+  let seq = 0;
+
+  while ((match = tagRegex.exec(text)) !== null) {
+    seq++;
+    const tag = match[1];
+    tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    const index = tagCounts[tag];
+    const offset = match.index;
+    const position = document.positionAt(offset);
+    newIndexedData.push({
+      tag,
+      index,
+      offset,
+      line: position.line,
+      uri: document.uri,
+      sequence: seq
+    });
+  } 
+
+  lastIndexedData = newIndexedData;
+}
+
+/**
+ * Return the latest indexed entries.
+ */
+function getLastIndexedData() {
+  return lastIndexedData;
+}
+
+module.exports = { scanDocumentForTags, getLastIndexedData };
+
+
+// FILE: src\utils\stateManager.js
+// src/utils/stateManager.js
+
+let globalState = null;
+
+function init(gs) {
+  globalState = gs;
+}
+
+function isInlineMode() {
+  return globalState?.get('xiInlineMode', false);
+}
+function setInlineMode(val) {
+  return globalState.update('xiInlineMode', val);
+}
+
+function isSidebarMode() {
+  return globalState?.get('xiSidebarMode', false);
+}
+function setSidebarMode(val) {
+  return globalState.update('xiSidebarMode', val);
+}
+
+function isAnnotationMode() {
+  return globalState?.get('xiAnnotationMode', false);
+}
+function setAnnotationMode(val) {
+  return globalState.update('xiAnnotationMode', val);
+}
+
+function isNumberMode() {
+  return globalState?.get('xiNumberMode', false);
+}
+function setNumberMode(val) {
+  return globalState.update('xiNumberMode', val);
+}
+
+module.exports = {
+  init,
+  isInlineMode, setInlineMode,
+  isSidebarMode, setSidebarMode,
+  isAnnotationMode, setAnnotationMode,
+  isNumberMode, setNumberMode
+};
+
+
+// FILE: src\utils\statusBar.js
+// src/utils/statusBar.js
+const vscode = require('vscode');
+const stateManager = require('./stateManager');
+
+let items = {};
+
+/**
+ * Initialize status bar items; call in activate(context).
+ */
+function init(context) {
+  items.inline = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 104);
+  items.sidebar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 103);
+  items.annotation = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 102);
+  items.number = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 101);
+  context.subscriptions.push(items.inline, items.sidebar, items.annotation, items.number);
+
+  // Hook click commands via package.json contributes.commands
+  // The item.command is set in updateAll below.
+}
+
+/**
+ * Read mode flags from globalState and update each status bar item.
+ */
+function loadState(globalState) {
+  // stateManager reads the same globalState internally
+  const inlineEnabled = stateManager.isInlineMode();
+  const sidebarEnabled = stateManager.isSidebarMode();
+  const annotationEnabled = stateManager.isAnnotationMode();
+  const numberEnabled = stateManager.isNumberMode();
+  update(items.inline, '$(tag)', inlineEnabled, 'Inline: On', 'Inline: Off', 'xi.toggleInlineMode');
+  update(items.sidebar, '$(list-tree)', sidebarEnabled, 'Sidebar: On', 'Sidebar: Off', 'xi.toggleSidebarMode');
+  update(items.annotation, '$(note)', annotationEnabled, 'Annotate: On', 'Annotate: Off', 'xi.toggleAnnotationMode');
+  update(items.number, '$(symbol-number)', numberEnabled, 'Numbers: On', 'Numbers: Off', 'xi.toggleNumberMode');
+}
+
+/**
+ * Update a single item.
+ */
+function update(item, icon, enabled, textOn, textOff, command) {
+  item.text = `${icon} ${enabled ? textOn : textOff}`;
+  item.tooltip = `Toggle ${textOn.split(':')[0]} mode`;
+  item.command = command;
+  item.backgroundColor = enabled ? new vscode.ThemeColor('statusBarItem.prominentBackground') : undefined;
+  item.show();
+}
+
+/**
+ * Dispose all status bar items (called in deactivate).
+ */
+function disposeAll() {
+  Object.values(items).forEach(i => {
+    try { i.dispose(); } catch {}
+  });
+}
+
+module.exports = { init, loadState, disposeAll };
+
+
