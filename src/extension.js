@@ -9,7 +9,7 @@ let codeLensEmitter = null;
 let decorationType = null;
 let lastIndexedData = [];
 
-// State management functions
+// State management
 function isInlineMode() { return globalState?.get('xiInlineMode', false); }
 function setInlineMode(val) { return globalState.update('xiInlineMode', val); }
 function isSidebarMode() { return globalState?.get('xiSidebarMode', false); }
@@ -19,16 +19,72 @@ function setAnnotationMode(val) { return globalState.update('xiAnnotationMode', 
 function isNumberMode() { return globalState?.get('xiNumberMode', false); }
 function setNumberMode(val) { return globalState.update('xiNumberMode', val); }
 
-// Helper: check if document is XML
+// Helper: detect XML documents
 function isXmlDocument(document) {
     if (!document) return false;
     if (document.languageId === 'xml') return true;
-    const fileName = document.fileName || document.uri?.fsPath || '';
-    if (/\.xml$/i.test(fileName)) return true;
+    const path = document.fileName || document.uri.fsPath || '';
+    if (/\.xml$/i.test(path)) return true;
     const text = document.getText().slice(0, 200);
-    if (/^\s*<\?xml\s+version/i.test(text)) return true;
-    if (/^\s*<[^>]+>/.test(text)) return true;
-    return false;
+    return /^\s*<\?xml\s+version/i.test(text) || /^\s*<[^>]+>/.test(text);
+}
+
+// Optimized tag extraction
+function extractTagPositionsOptimized(text) {
+    const raw = [];
+    const stack = [];
+    let id = 0;
+    const regex = /<\/?([A-Za-z0-9_:-]+)(?:[^>]*?)(\/>|>)/g;
+    let match;
+    while ((match = regex.exec(text))) {
+        const full = match[0];
+        const tag = match[1];
+        const isClose = full.startsWith('</');
+        const isSelfClose = full.endsWith('/>');
+        if (!isClose) {
+            id++;
+            const parent = stack.length ? stack[stack.length - 1].id : null;
+            const info = { id, tag, offset: match.index, parent };
+            raw.push(info);
+            if (!isSelfClose) stack.push(info);
+        } else if (stack.length && stack[stack.length - 1].tag === tag) {
+            stack.pop();
+        }
+    }
+    return raw;
+}
+
+// Fallback scan using chunked regex
+function scanDocumentForTagsRegexFallback(document) {
+    outputChannel.appendLine('🔄 Regex fallback...');
+    const text = document.getText();
+    const raw = [];
+    const stack = [];
+    let id = 0;
+    const regex = /<\/?([A-Za-z0-9_:-]+)(?:\s[^>]*?)?(?:\/>|>)/g;
+    const size = 50000;
+    for (let start = 0; start < text.length; start += size) {
+        const chunk = text.slice(start, start + size);
+        regex.lastIndex = 0;
+        let m;
+        while ((m = regex.exec(chunk))) {
+            const full = m[0];
+            const tag = m[1];
+            const offset = start + m.index;
+            const isClose = full.startsWith('</');
+            const isSelf = full.endsWith('/>') && !isClose;
+            if (!isClose) {
+                id++;
+                const parent = stack.length ? stack[stack.length - 1] : 0;
+                raw.push({ id, tag, offset, parent });
+                if (!isSelf) stack.push(id);
+            } else if (stack.length) {
+                stack.pop();
+            }
+        }
+    }
+    return raw;
+
 }
 
 // Cache document versions to avoid redundant rescans
@@ -36,80 +92,39 @@ const lastIndexedVersionMap = new Map();
 
 // Indexer: scan only when parent has multiple same-child tags
 function scanDocumentForTags(document) {
-    const docKey = document.uri.toString();
-    // Skip if version unchanged
-    const currentVersion = document.version;
-    if (lastIndexedVersionMap.get(docKey) === currentVersion) {
-        outputChannel?.appendLine(`📄 Document unchanged (v${currentVersion}); skipping scan.`);
-        return;
-    }
-    lastIndexedVersionMap.set(docKey, currentVersion);
-
-    if (!isXmlDocument(document)) return;
-    const text = document.getText();
-    const tagRegex = /<\/?([A-Za-z0-9_:-]+)(?:[^>]*)>/g;
-
-    // Track raw matches with parent context via stack
-    const raw = [];
-    const stack = [];
-    let match;
-    let id = 0;
-    while ((match = tagRegex.exec(text)) !== null) {
-        const full = match[0];
-        const name = match[1];
-        const isClose = /^<\//.test(full);
-        const isSelfClose = /\/>$/.test(full) && !isClose;
-        if (!isClose) {
-            id++;
-            const parent = stack.length ? stack[stack.length - 1] : 0;
-            raw.push({ id, tag: name, offset: match.index, parent });
-            if (!isSelfClose) stack.push(id);
-        }
-        if (isClose && stack.length) {
-            stack.pop();
-        }
+      const text = document.getText();
+    let raw;
+    try {
+        raw = extractTagPositionsOptimized(text);
+    } catch {
+        raw = scanDocumentForTagsRegexFallback(document);
     }
 
-    // Count occurrences per parent
+    // Count per parent/tag
     const counts = {};
     raw.forEach(({ parent, tag }) => {
-        const key = parent;
-        counts[key] = counts[key] || {};
-        counts[key][tag] = (counts[key][tag] || 0) + 1;
+        counts[parent] = counts[parent] || {};
+        counts[parent][tag] = (counts[parent][tag] || 0) + 1;
     });
 
-    // Build filtered indexed data with orderInTag and global sequence
-    const newData = [];
-    const perParentTagOrder = {};
+    // Build filtered data
+    const orderMap = {};
+    const data = [];
+
     raw.forEach(entry => {
-        const cnt = counts[entry.parent]?.[entry.tag] || 0;
-        if (cnt > 1) {
-            const pid = entry.parent;
-            perParentTagOrder[pid] = perParentTagOrder[pid] || {};
-            const order = (perParentTagOrder[pid][entry.tag] || 0) + 1;
-            perParentTagOrder[pid][entry.tag] = order;
+        const total = counts[entry.parent]?.[entry.tag] || 0;
+        if (total > 1) {
+            orderMap[entry.parent] = orderMap[entry.parent] || {};
+            const idx = (orderMap[entry.parent][entry.tag] || 0) + 1;
+            orderMap[entry.parent][entry.tag] = idx;
             const pos = document.positionAt(entry.offset);
-            newData.push({
-                tag: entry.tag,
-                orderInTag: order,
-                offset: entry.offset,
-                line: pos.line,
-                uri: document.uri,
-                globalSequence: entry.id,
-                documentId: document.uri.toString()
-            });
+            data.push({ tag: entry.tag, orderInTag: idx, offset: entry.offset, line: pos.line, uri: document.uri, globalSequence: entry.id, documentId: document.uri.toString() });
         }
     });
-
-    // Store and output
-    const keyDoc = document.uri.toString();
-    globalThis.xmlIndexerData = globalThis.xmlIndexerData || new Map();
-    globalThis.xmlIndexerData.set(keyDoc, newData);
-    lastIndexedData = newData;
-    outputChannel?.appendLine(`📊 Indexed ${newData.length} tags (filtered by multi-child rule)`);
+    globalThis.xmlIndexerData.set(document.uri.toString(), data);
+    lastIndexedData = data;
+    outputChannel.appendLine(`📊 Indexed ${data.length} tags`);
 }
-
-
 // Modified decoration function to show order information
 function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
     if (!editor) {
@@ -211,6 +226,7 @@ function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
         outputChannel?.appendLine(`[decoration] Failed to set decorations: ${e.message}`);
     }
 }
+
 
 // Modified CodeLens provider to show order information
 function registerXmlCodeLensProvider(context) {
