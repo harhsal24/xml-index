@@ -1,5 +1,7 @@
 // src/extension.js
 const vscode = require('vscode');
+const sax = require('sax');
+
 
 // Global providers and state
 let xmlIndexedProvider = null;
@@ -92,39 +94,75 @@ const lastIndexedVersionMap = new Map();
 
 // Indexer: scan only when parent has multiple same-child tags
 function scanDocumentForTags(document) {
-      const text = document.getText();
-    let raw;
-    try {
-        raw = extractTagPositionsOptimized(text);
-    } catch {
-        raw = scanDocumentForTagsRegexFallback(document);
-    }
+    const text = document.getText();
+    const parser = sax.parser(true, { position: true });
+    const data = [];
+    let globalId = 0;
+    const stack = [];
 
-    // Count per parent/tag
+    parser.onopentag = node => {
+        globalId++;
+        const parent = stack.length ? stack[stack.length - 1] : null;
+
+        data.push({
+            tag: node.name,
+            offset: parser.startTagPosition - 1,
+            line: parser.line - 1,
+            parent: parent?.id || null,
+            id: globalId
+        });
+
+        stack.push({ tag: node.name, id: globalId });
+    };
+
+    parser.onclosetag = tagName => {
+        if (stack.length && stack[stack.length - 1].tag === tagName) {
+            stack.pop();
+        }
+    };
+
+    parser.onerror = error => {
+        outputChannel?.appendLine(`❌ SAX parse error: ${error.message}`);
+        parser.resume();
+    };
+
+    parser.write(text).close();
+
+    // Count tag occurrences per parent
     const counts = {};
-    raw.forEach(({ parent, tag }) => {
+    data.forEach(({ parent, tag }) => {
         counts[parent] = counts[parent] || {};
         counts[parent][tag] = (counts[parent][tag] || 0) + 1;
     });
 
-    // Build filtered data
+    // Assign orderInTag
     const orderMap = {};
-    const data = [];
+    const indexedData = [];
 
-    raw.forEach(entry => {
+    data.forEach(entry => {
         const total = counts[entry.parent]?.[entry.tag] || 0;
         if (total > 1) {
             orderMap[entry.parent] = orderMap[entry.parent] || {};
             const idx = (orderMap[entry.parent][entry.tag] || 0) + 1;
             orderMap[entry.parent][entry.tag] = idx;
-            const pos = document.positionAt(entry.offset);
-            data.push({ tag: entry.tag, orderInTag: idx, offset: entry.offset, line: pos.line, uri: document.uri, globalSequence: entry.id, documentId: document.uri.toString() });
+
+            indexedData.push({
+                tag: entry.tag,
+                orderInTag: idx,
+                offset: entry.offset,
+                line: entry.line,
+                uri: document.uri,
+                globalSequence: entry.id,
+                documentId: document.uri.toString()
+            });
         }
     });
-    globalThis.xmlIndexerData.set(document.uri.toString(), data);
-    lastIndexedData = data;
-    outputChannel.appendLine(`📊 Indexed ${data.length} tags`);
+
+    globalThis.xmlIndexerData.set(document.uri.toString(), indexedData);
+    lastIndexedData = indexedData;
+    outputChannel?.appendLine(`📊 SAX indexed ${indexedData.length} tags`);
 }
+
 // Modified decoration function to show order information
 function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
     if (!editor) {
