@@ -446,9 +446,9 @@ class XmlIndexedChildrenProvider {
         } else if (element.isGroup) {
             // FIXED: Expanded group - show individual elements
             const children = element.entries.map((entry, index) => ({
-                label: isNumberMode() 
-                    ? `#${entry.sequence} (line ${entry.line + 1})` 
-                    : `${entry.tag} [#${entry.index}] (line ${entry.line + 1})`,
+                label: isNumberMode()
+     ? `#${entry.globalSequence} (line ${entry.line + 1})`
+     : `${entry.tag} [#${entry.orderInTag}] (line ${entry.line + 1})`,
                 uri: editor.document.uri,
                 line: entry.line,
                 tag: entry.tag,
