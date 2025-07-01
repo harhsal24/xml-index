@@ -31,8 +31,20 @@ function isXmlDocument(document) {
     return false;
 }
 
+// Cache document versions to avoid redundant rescans
+const lastIndexedVersionMap = new Map();
+
 // Indexer: scan only when parent has multiple same-child tags
 function scanDocumentForTags(document) {
+    const docKey = document.uri.toString();
+    // Skip if version unchanged
+    const currentVersion = document.version;
+    if (lastIndexedVersionMap.get(docKey) === currentVersion) {
+        outputChannel?.appendLine(`📄 Document unchanged (v${currentVersion}); skipping scan.`);
+        return;
+    }
+    lastIndexedVersionMap.set(docKey, currentVersion);
+
     if (!isXmlDocument(document)) return;
     const text = document.getText();
     const tagRegex = /<\/?([A-Za-z0-9_:-]+)(?:[^>]*)>/g;
@@ -97,16 +109,6 @@ function scanDocumentForTags(document) {
     outputChannel?.appendLine(`📊 Indexed ${newData.length} tags (filtered by multi-child rule)`);
 }
 
-// Helper function to get ordinal suffix (1st, 2nd, 3rd, etc.)
-function getOrdinalSuffix(number) {
-    const j = number % 10;
-    const k = number % 100;
-    
-    if (j === 1 && k !== 11) return 'st';
-    if (j === 2 && k !== 12) return 'nd';
-    if (j === 3 && k !== 13) return 'rd';
-    return 'th';
-}
 
 // Modified decoration function to show order information
 function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
@@ -294,12 +296,6 @@ function registerXmlCodeLensProvider(context) {
     outputChannel?.appendLine(`[CodeLens] Registered CodeLens provider`);
 
     return provider;
-}
-
-
-
-function getLastIndexedData() {
-    return lastIndexedData;
 }
 
 function getIndexedDataForDocument(document) {
@@ -896,6 +892,9 @@ function deactivate() {
     } catch (error) {
         console.error('Error during XML Indexer deactivation:', error);
     }
+    vscode.workspace.onDidCloseTextDocument(doc => {
+  lastIndexedVersionMap.delete(doc.uri.toString());
+});
 }
 
 // Export the activate and deactivate functions
