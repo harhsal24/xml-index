@@ -10,125 +10,105 @@ let decorationType = null;
 let lastIndexedData = [];
 
 // State management functions
-function isInlineMode() {
-    return globalState?.get('xiInlineMode', false);
-}
+function isInlineMode() { return globalState?.get('xiInlineMode', false); }
+function setInlineMode(val) { return globalState.update('xiInlineMode', val); }
+function isSidebarMode() { return globalState?.get('xiSidebarMode', false); }
+function setSidebarMode(val) { return globalState.update('xiSidebarMode', val); }
+function isAnnotationMode() { return globalState?.get('xiAnnotationMode', false); }
+function setAnnotationMode(val) { return globalState.update('xiAnnotationMode', val); }
+function isNumberMode() { return globalState?.get('xiNumberMode', false); }
+function setNumberMode(val) { return globalState.update('xiNumberMode', val); }
 
-function setInlineMode(val) {
-    return globalState.update('xiInlineMode', val);
-}
-
-function isSidebarMode() {
-    return globalState?.get('xiSidebarMode', false);
-}
-
-function setSidebarMode(val) {
-    return globalState.update('xiSidebarMode', val);
-}
-
-function isAnnotationMode() {
-    return globalState?.get('xiAnnotationMode', false);
-}
-
-function setAnnotationMode(val) {
-    return globalState.update('xiAnnotationMode', val);
-}
-
-function isNumberMode() {
-    return globalState?.get('xiNumberMode', false);
-}
-
-function setNumberMode(val) {
-    return globalState.update('xiNumberMode', val);
-}
-
-// Helper function to check if document is XML
+// Helper: check if document is XML
 function isXmlDocument(document) {
     if (!document) return false;
-    
-    // Check language ID
     if (document.languageId === 'xml') return true;
-    
-    // Check file extension for diff scenarios
     const fileName = document.fileName || document.uri?.fsPath || '';
-    if (fileName.match(/\.xml$/i)) return true;
-    
-    // Check content for XML patterns (first few lines)
-    const text = document.getText();
-    const firstLines = text.split('\n').slice(0, 5).join('\n');
-    
-    // Look for XML declaration or common XML patterns
-    if (firstLines.match(/<\?xml\s+version/i)) return true;
-    if (firstLines.match(/<[a-zA-Z][^>]*>/)) return true;
-    
+    if (/\.xml$/i.test(fileName)) return true;
+    const text = document.getText().slice(0, 200);
+    if (/^\s*<\?xml\s+version/i.test(text)) return true;
+    if (/^\s*<[^>]+>/.test(text)) return true;
     return false;
 }
 
-// Indexer functions
+// Indexer: scan only when parent has multiple same-child tags
 function scanDocumentForTags(document) {
-    if (!isXmlDocument(document)) {
-        outputChannel?.appendLine(`[indexer] Document is not XML, skipping scan`);
-        return;
-    }
-
+    if (!isXmlDocument(document)) return;
     const text = document.getText();
-    const tagRegex = /<([A-Za-z0-9_:-]+)(\s[^>]*)?(?:\s*\/)?>/g;
-    const tagCounts = Object.create(null);
-    const newIndexedData = [];
+    const tagRegex = /<\/?([A-Za-z0-9_:-]+)(?:[^>]*)>/g;
+
+    // Track raw matches with parent context via stack
+    const raw = [];
+    const stack = [];
     let match;
-    let seq = 0;
-
-    // Clear previous data for this document
-    const docKey = document.uri.toString();
-    if (!globalThis.xmlIndexerData) {
-        globalThis.xmlIndexerData = new Map();
-    }
-
+    let id = 0;
     while ((match = tagRegex.exec(text)) !== null) {
-        seq++;
-        const tag = match[1];
-        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-        const index = tagCounts[tag];
-        const offset = match.index;
-        const position = document.positionAt(offset);
-        newIndexedData.push({
-            tag,
-            index,
-            offset,
-            line: position.line,
-            uri: document.uri,
-            sequence: seq,
-            documentId: document.uri.toString()
-        });
+        const full = match[0];
+        const name = match[1];
+        const isClose = /^<\//.test(full);
+        const isSelfClose = /\/>$/.test(full) && !isClose;
+        if (!isClose) {
+            id++;
+            const parent = stack.length ? stack[stack.length - 1] : 0;
+            raw.push({ id, tag: name, offset: match.index, parent });
+            if (!isSelfClose) stack.push(id);
+        }
+        if (isClose && stack.length) {
+            stack.pop();
+        }
     }
 
-    // Store indexed data per document
-    globalThis.xmlIndexerData.set(docKey, newIndexedData);
-    
-    // Update global lastIndexedData for backward compatibility
-    lastIndexedData = newIndexedData;
-    
-    outputChannel?.appendLine(`📊 Indexed ${newIndexedData.length} XML tags for ${docKey}`);
-    
-    // Debug: Log some sample data
-    if (newIndexedData.length > 0) {
-        outputChannel?.appendLine(`📝 Sample tag: ${newIndexedData[0].tag} at line ${newIndexedData[0].line}`);
-    }
+    // Count occurrences per parent
+    const counts = {};
+    raw.forEach(({ parent, tag }) => {
+        const key = parent;
+        counts[key] = counts[key] || {};
+        counts[key][tag] = (counts[key][tag] || 0) + 1;
+    });
+
+    // Build filtered indexed data with orderInTag and global sequence
+    const newData = [];
+    const perParentTagOrder = {};
+    raw.forEach(entry => {
+        const cnt = counts[entry.parent]?.[entry.tag] || 0;
+        if (cnt > 1) {
+            const pid = entry.parent;
+            perParentTagOrder[pid] = perParentTagOrder[pid] || {};
+            const order = (perParentTagOrder[pid][entry.tag] || 0) + 1;
+            perParentTagOrder[pid][entry.tag] = order;
+            const pos = document.positionAt(entry.offset);
+            newData.push({
+                tag: entry.tag,
+                orderInTag: order,
+                offset: entry.offset,
+                line: pos.line,
+                uri: document.uri,
+                globalSequence: entry.id,
+                documentId: document.uri.toString()
+            });
+        }
+    });
+
+    // Store and output
+    const keyDoc = document.uri.toString();
+    globalThis.xmlIndexerData = globalThis.xmlIndexerData || new Map();
+    globalThis.xmlIndexerData.set(keyDoc, newData);
+    lastIndexedData = newData;
+    outputChannel?.appendLine(`📊 Indexed ${newData.length} tags (filtered by multi-child rule)`);
 }
 
-function getLastIndexedData() {
-    return lastIndexedData;
+// Helper function to get ordinal suffix (1st, 2nd, 3rd, etc.)
+function getOrdinalSuffix(number) {
+    const j = number % 10;
+    const k = number % 100;
+    
+    if (j === 1 && k !== 11) return 'st';
+    if (j === 2 && k !== 12) return 'nd';
+    if (j === 3 && k !== 13) return 'rd';
+    return 'th';
 }
 
-function getIndexedDataForDocument(document) {
-    if (!globalThis.xmlIndexerData) {
-        return [];
-    }
-    const docKey = document.uri.toString();
-    return globalThis.xmlIndexerData.get(docKey) || [];
-}
-
-// Decoration functions - FIXED SPACING
+// Modified decoration function to show order information
 function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
     if (!editor) {
         outputChannel?.appendLine('[decoration] No active editor; skipping inline decorations.');
@@ -154,7 +134,7 @@ function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
 
     decorationType = vscode.window.createTextEditorDecorationType({
         after: {
-            margin: '0 0 0 1.5em', // Increased margin for better spacing
+            margin: '0 0 0 1.5em',
             fontStyle: 'italic',
             color: new vscode.ThemeColor('editorCodeLens.foreground')
         }
@@ -163,6 +143,12 @@ function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
     const decorations = [];
     const text = doc.getText();
     const entries = getIndexedDataForDocument(doc);
+    
+    // Count total occurrences of each tag to show context
+    const tagTotals = {};
+    entries.forEach(entry => {
+        tagTotals[entry.tag] = Math.max(tagTotals[entry.tag] || 0, entry.orderInTag);
+    });
 
     for (const entry of entries) {
         const offset = entry.offset;
@@ -184,10 +170,25 @@ function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
             pos = new vscode.Position(entry.line, 0);
         }
 
-        // FIXED: Added proper spacing around the indexed number/text
-        const contentText = numberModeEnabled
-            ? ` ← #${entry.sequence} ` // Added spaces around the content
-            : ` ← [${entry.tag} #${entry.index}] `;
+        // Show order information - only display if there are multiple occurrences
+        let contentText;
+        const totalCount = tagTotals[entry.tag];
+        
+        if (totalCount > 1) {
+            // Multiple occurrences - show order
+            if (numberModeEnabled) {
+                contentText = ` ← ${entry.orderInTag}/${totalCount} `;
+            } else {
+                contentText = ` ← [${entry.tag} ${entry.orderInTag}/${totalCount}] `;
+            }
+        } else {
+            // Single occurrence - minimal display or skip
+            if (numberModeEnabled) {
+                contentText = ` ← #${entry.globalSequence} `;
+            } else {
+                contentText = ` ← [${entry.tag}] `;
+            }
+        }
 
         decorations.push({
             range: new vscode.Range(pos, pos),
@@ -203,11 +204,113 @@ function applyInlineDecorations(editor, inlineModeEnabled, numberModeEnabled) {
 
     try {
         editor.setDecorations(decorationType, decorations);
-        outputChannel?.appendLine(`[decoration] Applied ${decorations.length} inline decorations.`);
+        outputChannel?.appendLine(`[decoration] Applied ${decorations.length} order decorations.`);
     } catch (e) {
         outputChannel?.appendLine(`[decoration] Failed to set decorations: ${e.message}`);
     }
 }
+
+// Modified CodeLens provider to show order information
+function registerXmlCodeLensProvider(context) {
+    codeLensEmitter = new vscode.EventEmitter();
+
+    const provider = {
+        provideCodeLenses(document, token) {
+            outputChannel?.appendLine(`[CodeLens] provideCodeLenses called for: ${document.uri.toString()}`);
+            
+            if (!isAnnotationMode()) {
+                outputChannel?.appendLine('[CodeLens] Annotation mode disabled, returning empty array');
+                return [];
+            }
+
+            if (!isXmlDocument(document)) {
+                outputChannel?.appendLine('[CodeLens] Document is not XML, returning empty array');
+                return [];
+            }
+
+            const entries = getIndexedDataForDocument(document);
+            outputChannel?.appendLine(`[CodeLens] Found ${entries.length} indexed entries for this document`);
+
+            // Count total occurrences of each tag
+            const tagTotals = {};
+            entries.forEach(entry => {
+                tagTotals[entry.tag] = Math.max(tagTotals[entry.tag] || 0, entry.orderInTag);
+            });
+
+            const lenses = [];
+            const processedLines = new Set();
+
+            for (const entry of entries) {
+                try {
+                    if (processedLines.has(entry.line)) {
+                        continue;
+                    }
+                    processedLines.add(entry.line);
+
+                    const pos = document.positionAt(entry.offset);
+                    const range = new vscode.Range(pos, pos);
+                    
+                    const totalCount = tagTotals[entry.tag];
+                    let title;
+                    
+                    if (totalCount > 1) {
+                        // Show order for multiple occurrences
+                        title = isNumberMode()
+                            ? ` ${entry.orderInTag}/${totalCount}`
+                            : ` [${entry.tag} ${entry.orderInTag}/${totalCount}]`;
+                    } else {
+                        // Single occurrence
+                        title = isNumberMode()
+                            ? ` #${entry.globalSequence}`
+                            : ` [${entry.tag}]`;
+                    }
+
+                    lenses.push(new vscode.CodeLens(range, {
+                        command: 'xi.revealIndexedLine',
+                        title,
+                        arguments: [document.uri, entry.line]
+                    }));
+                } catch (error) {
+                    outputChannel?.appendLine(`[CodeLens] Error creating lens for entry: ${error.message}`);
+                }
+            }
+            
+            outputChannel?.appendLine(`[CodeLens] Returning ${lenses.length} code lenses`);
+            return lenses;
+        },
+
+        onDidChangeCodeLenses: codeLensEmitter.event
+    };
+
+    const disposable = vscode.languages.registerCodeLensProvider(
+        [
+            { language: 'xml' },
+            { pattern: '**/*.xml' }
+        ],
+        provider
+    );
+    
+    context.subscriptions.push(disposable);
+    outputChannel?.appendLine(`[CodeLens] Registered CodeLens provider`);
+
+    return provider;
+}
+
+
+
+function getLastIndexedData() {
+    return lastIndexedData;
+}
+
+function getIndexedDataForDocument(document) {
+    if (!globalThis.xmlIndexerData) {
+        return [];
+    }
+    const docKey = document.uri.toString();
+    return globalThis.xmlIndexerData.get(docKey) || [];
+}
+
+
 
 function disposeDecoration() {
     if (decorationType) {
@@ -227,77 +330,6 @@ function refreshCodeLenses() {
     }
 }
 
-function registerXmlCodeLensProvider(context) {
-    codeLensEmitter = new vscode.EventEmitter();
-
-    const provider = {
-        provideCodeLenses(document, token) {
-            outputChannel?.appendLine(`[CodeLens] provideCodeLenses called for: ${document.uri.toString()}`);
-            outputChannel?.appendLine(`[CodeLens] Document language: ${document.languageId}`);
-            outputChannel?.appendLine(`[CodeLens] Annotation mode: ${isAnnotationMode()}`);
-            
-            if (!isAnnotationMode()) {
-                outputChannel?.appendLine('[CodeLens] Annotation mode disabled, returning empty array');
-                return [];
-            }
-
-            if (!isXmlDocument(document)) {
-                outputChannel?.appendLine('[CodeLens] Document is not XML, returning empty array');
-                return [];
-            }
-
-            // Get indexed data for this specific document
-            const entries = getIndexedDataForDocument(document);
-            outputChannel?.appendLine(`[CodeLens] Found ${entries.length} indexed entries for this document`);
-
-            const lenses = [];
-            const processedLines = new Set(); // FIXED: Prevent duplicate annotations on same line
-
-            for (const entry of entries) {
-                try {
-                    // FIXED: Skip if we already processed this line
-                    if (processedLines.has(entry.line)) {
-                        continue;
-                    }
-                    processedLines.add(entry.line);
-
-                    const pos = document.positionAt(entry.offset);
-                    const range = new vscode.Range(pos, pos);
-                    const title = isNumberMode()
-                        ? ` #${entry.sequence}`
-                        : ` [${entry.tag} #${entry.index}]`;
-
-                    lenses.push(new vscode.CodeLens(range, {
-                        command: 'xi.revealIndexedLine',
-                        title,
-                        arguments: [document.uri, entry.line]
-                    }));
-                } catch (error) {
-                    outputChannel?.appendLine(`[CodeLens] Error creating lens for entry: ${error.message}`);
-                }
-            }
-            
-            outputChannel?.appendLine(`[CodeLens] Returning ${lenses.length} code lenses`);
-            return lenses;
-        },
-
-        onDidChangeCodeLenses: codeLensEmitter.event
-    };
-
-    // Register provider with single, comprehensive selector
-    const disposable = vscode.languages.registerCodeLensProvider(
-        [
-            { language: 'xml' },
-            { pattern: '**/*.xml' }
-        ],
-        provider
-    );
-    
-    context.subscriptions.push(disposable);
-    outputChannel?.appendLine(`[CodeLens] Registered CodeLens provider`);
-
-    return provider;
-}
 
 // XML Tree Provider - IMPROVED WITH DROPDOWN STYLE
 class XmlIndexedChildrenProvider {
