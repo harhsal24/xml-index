@@ -118,7 +118,6 @@
     "eslint": "^8.0.0"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.2.5",
-    "sax": "^1.4.1"
+    "fast-xml-parser": "^5.2.5"
   }
 }
