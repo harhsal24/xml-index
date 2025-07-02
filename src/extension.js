@@ -1,6 +1,7 @@
 // src/extension.js
 const vscode = require("vscode");
-const sax = require("sax");
+const { XMLParser    } = require('fast-xml-parser');
+
 
 // Global providers and state
 let xmlIndexedProvider = null;
@@ -83,44 +84,45 @@ function debounceOperation(key, operation, delay) {
 }
 
 // Helper function for regular-sized documents
+// Use fast-xml-parser's "preserveOrder" + built-in position tracking
 function scanRegularDocument(document, text) {
-  const parser = sax.parser(true, { position: true });
+  // 1) Tokenize XML using fast-xml-parser to avoid expensive regex
+  const parser = new XMLParser({
+    ignoreAttributes: true,
+    // use default options; no preserveOrder needed for tokenize
+  });
+  // tokenizer returns [{type, tagName, startIndex, isSelfClosing, ...}, ...]
+  const tokens = parser.parse(text, true);
   const data = [];
   let globalId = 0;
-  const stack = [];
+    const stack = [];
 
-  parser.onopentag = (node) => {
-    globalId++;
-    const parent = stack.length ? stack[stack.length - 1] : null;
-
-    data.push({
-      tag: node.name,
-      offset: parser.startTagPosition - 1,
-      line: parser.line - 1,
-      parent: parent?.id || null,
-      id: globalId,
-    });
-
-    stack.push({ tag: node.name, id: globalId });
-  };
-
-  parser.onclosetag = (tagName) => {
-    if (stack.length && stack[stack.length - 1].tag === tagName) {
+  for (const tok of tokens) {
+    // We only care about open tags and self-closing tags
+    if (tok.type === 'opentag' || tok.type === 'selfclose') {
+      globalId++;
+      const parentFrame = stack[stack.length - 1];
+      data.push({
+        tag:    tok.tagName,
+        offset: tok.startIndex,
+        line:   text.slice(0, tok.startIndex).split('\n').length - 1,
+        parent: parentFrame ? parentFrame.id : null,
+        id:     globalId
+    })
+    if (tok.tokenType === 'OpenTag') {
+        stack.push({ id: globalId, tag: tok.tagName });
+      }
+    } else if (tok.tokenType === 'CloseTag') {
       stack.pop();
     }
-  };
+  }
+  
 
-  parser.onerror = (error) => {
-    outputChannel?.appendLine(`❌ SAX parse error: ${error.message}`);
-    parser.resume();
-  };
-
-  parser.write(text).close();
-
-  // Process and cache results
-  const indexedData = processAndCacheResults(document, data);
-  return indexedData;
+  // 2) Process hierarchy, siblings, and cache
+  return processAndCacheResults(document, data);
 }
+
+
 
 // Helper function to process chunk with regex
 function processChunkRegex(chunk, startOffset, startId) {
@@ -156,25 +158,18 @@ function processChunkRegex(chunk, startOffset, startId) {
 
 // Helper function for large documents
 async function scanLargeDocument(document, text) {
+  // fallback to chunked regex scanning for massive files
   const chunkSize = 10000;
   const data = [];
   let globalId = 0;
-
-  // Process in chunks with progress indication
   for (let start = 0; start < text.length; start += chunkSize) {
     const chunk = text.slice(start, Math.min(start + chunkSize, text.length));
-    const chunkData = processChunkRegex(chunk, start, globalId);
-    data.push(...chunkData.entries);
-    globalId = chunkData.nextId;
-
-    // Yield control periodically
-    if (start % (chunkSize * 2) === 0) {
-      await new Promise((resolve) => setTimeout(resolve, 1));
-    }
+    const { entries, nextId } = processChunkRegex(chunk, start, globalId);
+    data.push(...entries);
+    globalId = nextId;
+    if (start % (chunkSize * 2) === 0) await new Promise(r => setTimeout(r, 1));
   }
-
-  const indexedData = processAndCacheResults(document, data);
-  return indexedData;
+  return processAndCacheResults(document, data);
 }
 
 // Enhanced data processing to track siblings and only index duplicates
@@ -237,34 +232,19 @@ function processAndCacheResults(document, data) {
     return processedData;
 }
 // Main indexer function
+// Main switch
 async function scanDocumentForTags(document) {
-  // Check if we need to reindex
   if (!shouldReindex(document)) {
     const cached = documentCache.get(document.uri.toString());
-    if (cached) {
-      outputChannel?.appendLine(
-        `📋 Using cached data for ${document.fileName}`
-      );
-      if (globalThis.xmlIndexerData) {
-        globalThis.xmlIndexerData.set(document.uri.toString(), cached);
-      }
-      lastIndexedData = cached;
-      return cached;
-    }
+    if (cached) return cached;
   }
 
   const text = document.getText();
-  const isLargeFile = text.length > LARGE_FILE_THRESHOLD;
-
-  if (isLargeFile) {
-    outputChannel?.appendLine(
-      `⚠️ Large file detected (${text.length} chars), using optimized processing`
-    );
+  if (text.length > LARGE_FILE_THRESHOLD) {
     return await scanLargeDocument(document, text);
+  } else {
+    return scanRegularDocument(document, text);
   }
-
-  // Regular processing for smaller files
-  return scanRegularDocument(document, text);
 }
 
 // Modified decoration function to only show decorations for elements that need indexing
