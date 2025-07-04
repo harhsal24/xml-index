@@ -48,6 +48,16 @@
       {
         "command": "xi.revealIndexedLine",
         "title": "Reveal Indexed Line"
+      },
+      {
+        "command": "xi.toggleViewportMode",
+        "title": "XML Indexer: Toggle Viewport Mode",
+        "category": "XML Indexer"
+      },
+      {
+        "command": "xi.toggleCursorMode",
+        "title": "XML Indexer: Toggle Cursor Mode",
+        "category": "XML Indexer"
       }
     ],
     "views": {
